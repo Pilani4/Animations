@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced 3D Interactive Portfolio</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 18px;
+        }
+        #project-info {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 16px;
+            background-color: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">Click and drag to rotate. Scroll to zoom. Click on objects for details.</div>
+    <div id="project-info"></div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
+    <script>
+        let scene, camera, renderer, raycaster, mouse;
+        let projects = [], particles = [], ribbons = [];
+        let INTERSECTED;
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Add lights
+            const ambientLight = new THREE.AmbientLight(0x404040);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+            directionalLight.position.set(1, 1, 1);
+            scene.add(directionalLight);
+
+            // Create projects
+            const projectGeometries = [
+                new THREE.BoxGeometry(1, 1, 1),
+                new THREE.SphereGeometry(0.5, 32, 32),
+                new THREE.ConeGeometry(0.5, 1, 32),
+                new THREE.TorusGeometry(0.3, 0.2, 16, 100),
+                new THREE.OctahedronGeometry(0.5),
+                new THREE.TetrahedronGeometry(0.5),
+                new THREE.DodecahedronGeometry(0.5),
+                new THREE.IcosahedronGeometry(0.5)
+            ];
+
+            const projectMaterials = [
+                new THREE.MeshPhongMaterial({ color: 0xff0000 }),
+                new THREE.MeshPhongMaterial({ color: 0x00ff00 }),
+                new THREE.MeshPhongMaterial({ color: 0x0000ff }),
+                new THREE.MeshPhongMaterial({ color: 0xffff00 }),
+                new THREE.MeshPhongMaterial({ color: 0xff00ff }),
+                new THREE.MeshPhongMaterial({ color: 0x00ffff }),
+                new THREE.MeshPhongMaterial({ color: 0xffa500 }),
+                new THREE.MeshPhongMaterial({ color: 0x800080 })
+            ];
+
+            for (let i = 0; i < projectGeometries.length; i++) {
+                const project = new THREE.Mesh(projectGeometries[i], projectMaterials[i]);
+                project.position.set(
+                    Math.random() * 12 - 6,
+                    Math.random() * 12 - 6,
+                    Math.random() * 12 - 6
+                );
+                project.userData = { description: `Project ${i + 1}: Click for more info!` };
+                scene.add(project);
+                projects.push(project);
+
+                // Add floating animation
+                new TWEEN.Tween(project.position)
+                    .to({ y: project.position.y + 0.5 }, 2000 + Math.random() * 1000)
+                    .easing(TWEEN.Easing.Quadratic.InOut)
+                    .yoyo(true)
+                    .repeat(Infinity)
+                    .start();
+
+                // Add rotation animation
+                new TWEEN.Tween(project.rotation)
+                    .to({ x: Math.PI * 2, y: Math.PI * 2 }, 10000 + Math.random() * 5000)
+                    .easing(TWEEN.Easing.Linear.None)
+                    .repeat(Infinity)
+                    .start();
+            }
+
+            // Create particles
+            const particleGeometry = new THREE.BufferGeometry();
+            const particleMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.05 });
+
+            const particlePositions = new Float32Array(1000 * 3);
+            for (let i = 0; i < particlePositions.length; i += 3) {
+                particlePositions[i] = Math.random() * 20 - 10;
+                particlePositions[i + 1] = Math.random() * 20 - 10;
+                particlePositions[i + 2] = Math.random() * 20 - 10;
+            }
+
+            particleGeometry.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+            const particleSystem = new THREE.Points(particleGeometry, particleMaterial);
+            scene.add(particleSystem);
+
+            // Create ribbons
+            const ribbonMaterial = new THREE.MeshPhongMaterial({ color: 0x00ff00, side: THREE.DoubleSide });
+            for (let i = 0; i < 5; i++) {
+                const ribbonGeometry = new THREE.PlaneGeometry(0.1, 10, 1, 20);
+                const ribbon = new THREE.Mesh(ribbonGeometry, ribbonMaterial);
+                ribbon.position.set(
+                    Math.random() * 16 - 8,
+                    Math.random() * 16 - 8,
+                    Math.random() * 16 - 8
+                );
+                scene.add(ribbon);
+                ribbons.push(ribbon);
+
+                // Animate ribbon
+                animateRibbon(ribbon);
+            }
+
+            camera.position.z = 15;
+
+            // Setup raycaster for object interaction
+            raycaster = new THREE.Raycaster();
+            mouse = new THREE.Vector2();
+
+            // Event listeners
+            document.addEventListener('mousemove', onMouseMove, false);
+            document.addEventListener('click', onMouseClick, false);
+            document.addEventListener('wheel', onMouseWheel, false);
+
+            // OrbitControls-like rotation
+            let isDragging = false;
+            let previousMousePosition = { x: 0, y: 0 };
+
+            document.addEventListener('mousedown', (e) => { isDragging = true; });
+            document.addEventListener('mouseup', (e) => { isDragging = false; });
+            document.addEventListener('mousemove', (e) => {
+                const deltaMove = {
+                    x: e.offsetX - previousMousePosition.x,
+                    y: e.offsetY - previousMousePosition.y
+                };
+
+                if (isDragging) {
+                    const deltaRotationQuaternion = new THREE.Quaternion().setFromEuler(
+                        new THREE.Euler(toRadians(deltaMove.y * 1), toRadians(deltaMove.x * 1), 0, 'XYZ')
+                    );
+                    scene.quaternion.multiplyQuaternions(deltaRotationQuaternion, scene.quaternion);
+                }
+
+                previousMousePosition = { x: e.offsetX, y: e.offsetY };
+            });
+
+            function toRadians(angle) {
+                return angle * (Math.PI / 180);
+            }
+
+            animate();
+        }
+
+        function animateRibbon(ribbon) {
+            const initialPosition = ribbon.position.clone();
+            const targetPosition = initialPosition.clone().add(new THREE.Vector3(
+                Math.random() * 4 - 2,
+                Math.random() * 4 - 2,
+                Math.random() * 4 - 2
+            ));
+
+            new TWEEN.Tween(ribbon.position)
+                .to(targetPosition, 5000 + Math.random() * 5000)
+                .easing(TWEEN.Easing.Sinusoidal.InOut)
+                .yoyo(true)
+                .repeat(Infinity)
+                .start();
+
+            new TWEEN.Tween(ribbon.rotation)
+                .to({ x: Math.PI * 2, y: Math.PI * 2, z: Math.PI * 2 }, 10000 + Math.random() * 10000)
+                .easing(TWEEN.Easing.Linear.None)
+                .repeat(Infinity)
+                .start();
+        }
+
+        function onMouseMove(event) {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        }
+
+        function onMouseClick(event) {
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(projects);
+            if (intersects.length > 0) {
+                const project = intersects[0].object;
+                document.getElementById('project-info').textContent = project.userData.description;
+                document.getElementById('project-info').style.display = 'block';
+
+                // Highlight effect
+                new TWEEN.Tween(project.scale)
+                    .to({ x: 1.5, y: 1.5, z: 1.5 }, 200)
+                    .easing(TWEEN.Easing.Quadratic.Out)
+                    .yoyo(true)
+                    .repeat(1)
+                    .start();
+            } else {
+                document.getElementById('project-info').style.display = 'none';
+            }
+        }
+
+        function onMouseWheel(event) {
+            camera.position.z += event.deltaY * 0.01;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            TWEEN.update();
+
+            // Rotate particles
+            scene.children[3].rotation.y += 0.001;
+
+            // Update the picking ray with the camera and mouse position
+            raycaster.setFromCamera(mouse, camera);
+
+            // Calculate objects intersecting the picking ray
+            const intersects = raycaster.intersectObjects(projects);
+
+            if (intersects.length > 0) {
+                if (INTERSECTED != intersects[0].object) {
+                    if (INTERSECTED) INTERSECTED.material.emissive.setHex(INTERSECTED.currentHex);
+                    INTERSECTED = intersects[0].object;
+                    INTERSECTED.currentHex = INTERSECTED.material.emissive.getHex();
+                    INTERSECTED.material.emissive.setHex(0x555555);
+                }
+            } else {
+                if (INTERSECTED) INTERSECTED.material.emissive.setHex(INTERSECTED.currentHex);
+                INTERSECTED = null;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        init();
+
+        // Handle window resizing
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
